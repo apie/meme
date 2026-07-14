@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"image"
+	_ "image/gif"
 	"image/jpeg"
+	_ "image/png"
 	"log"
 	"math"
 	"net/http"
@@ -63,17 +65,35 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	imgURL := q.Get("image")
 	if imgURL == "" {
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, "Generate meme by providing an image URL, top and bottom text using query parameters. See <a href=\"/?top=I'm in ur cloud&bottom=creating ur memes&image=https://upload.wikimedia.org/wikipedia/commons/thumb/f/ff/Cat_on_laptop_-_Just_Browsing.jpg/800px-Cat_on_laptop_-_Just_Browsing.jpg\">example</a>")
+		fmt.Fprintf(w, "Generate meme by providing an image URL, top and bottom text using query parameters. See <a href=\"/?top=I'm in ur cloud&bottom=creating ur memes&image=https://upload.wikimedia.org/wikipedia/commons/f/ff/Cat_on_laptop_-_Just_Browsing.jpg\">example</a>")
 		return
 	}
-	resp, err := http.Get(imgURL)
+	req, err := http.NewRequest(http.MethodGet, imgURL, nil)
 	if err != nil {
-		log.Fatal(err)
+		http.Error(w, "Invalid image URL", http.StatusBadRequest)
+		return
+	}
+	req.Header.Set("User-Agent", "memegen/1.0 (+https://github.com/steren/memegen)")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Print("Error fetching image: ", err)
+		http.Error(w, "Failed to fetch image", http.StatusBadGateway)
+		return
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("Image fetch returned status %d for %s", resp.StatusCode, imgURL)
+		http.Error(w, "Failed to fetch image", http.StatusBadGateway)
+		return
+	}
+
 	im, _, err := image.Decode(resp.Body)
 	if err != nil {
-		log.Fatal(err)
+		log.Print("Error decoding image: ", err)
+		http.Error(w, "Failed to decode image", http.StatusBadRequest)
+		return
 	}
 
 	meme := createMeme(im, textTop, textBottom)
