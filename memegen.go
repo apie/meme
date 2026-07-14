@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"container/list"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -11,8 +13,74 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/fogleman/gg"
+)
+
+// lruCache is a simple thread-safe, bounded, in-memory LRU cache.
+type lruCache struct {
+	mu    sync.Mutex
+	max   int
+	items map[string]*list.Element
+	order *list.List
+}
+
+type lruEntry struct {
+	key   string
+	value interface{}
+}
+
+func newLRUCache(max int) *lruCache {
+	return &lruCache{
+		max:   max,
+		items: make(map[string]*list.Element),
+		order: list.New(),
+	}
+}
+
+func (c *lruCache) Get(key string) (interface{}, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	el, ok := c.items[key]
+	if !ok {
+		return nil, false
+	}
+	c.order.MoveToFront(el)
+	return el.Value.(*lruEntry).value, true
+}
+
+func (c *lruCache) Set(key string, value interface{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if el, ok := c.items[key]; ok {
+		el.Value.(*lruEntry).value = value
+		c.order.MoveToFront(el)
+		return
+	}
+
+	el := c.order.PushFront(&lruEntry{key: key, value: value})
+	c.items[key] = el
+
+	if c.order.Len() > c.max {
+		oldest := c.order.Back()
+		if oldest != nil {
+			c.order.Remove(oldest)
+			delete(c.items, oldest.Value.(*lruEntry).key)
+		}
+	}
+}
+
+var (
+	// imageCache holds decoded source images keyed by image URL, so
+	// requesting different meme text over the same image skips the
+	// download + decode.
+	imageCache = newLRUCache(100)
+	// memeCache holds fully rendered JPEG output keyed by URL+top+bottom,
+	// so requesting the exact same meme again skips rendering entirely.
+	memeCache = newLRUCache(100)
 )
 
 func createMeme(im image.Image, textTop string, textBottom string) image.Image {
@@ -68,38 +136,63 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "Generate meme by providing an image URL, top and bottom text using query parameters. See <a href=\"/?top=I'm in ur cloud&bottom=creating ur memes&image=https://upload.wikimedia.org/wikipedia/commons/f/ff/Cat_on_laptop_-_Just_Browsing.jpg\">example</a>")
 		return
 	}
-	req, err := http.NewRequest(http.MethodGet, imgURL, nil)
-	if err != nil {
-		http.Error(w, "Invalid image URL", http.StatusBadRequest)
-		return
-	}
-	req.Header.Set("User-Agent", "memegen/1.0 (+https://github.com/steren/memegen)")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Print("Error fetching image: ", err)
-		http.Error(w, "Failed to fetch image", http.StatusBadGateway)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("Image fetch returned status %d for %s", resp.StatusCode, imgURL)
-		http.Error(w, "Failed to fetch image", http.StatusBadGateway)
+	memeKey := imgURL + "\x00" + textTop + "\x00" + textBottom
+	if cached, ok := memeCache.Get(memeKey); ok {
+		log.Print("Meme cache hit for ", imgURL)
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(cached.([]byte))
 		return
 	}
 
-	im, _, err := image.Decode(resp.Body)
-	if err != nil {
-		log.Print("Error decoding image: ", err)
-		http.Error(w, "Failed to decode image", http.StatusBadRequest)
-		return
+	var im image.Image
+	if cached, ok := imageCache.Get(imgURL); ok {
+		log.Print("Image cache hit for ", imgURL)
+		im = cached.(image.Image)
+	} else {
+		req, err := http.NewRequest(http.MethodGet, imgURL, nil)
+		if err != nil {
+			http.Error(w, "Invalid image URL", http.StatusBadRequest)
+			return
+		}
+		req.Header.Set("User-Agent", "memegen/1.0 (+https://github.com/steren/memegen)")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Print("Error fetching image: ", err)
+			http.Error(w, "Failed to fetch image", http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			log.Printf("Image fetch returned status %d for %s", resp.StatusCode, imgURL)
+			http.Error(w, "Failed to fetch image", http.StatusBadGateway)
+			return
+		}
+
+		im, _, err = image.Decode(resp.Body)
+		if err != nil {
+			log.Print("Error decoding image: ", err)
+			http.Error(w, "Failed to decode image", http.StatusBadRequest)
+			return
+		}
+
+		imageCache.Set(imgURL, im)
 	}
 
 	meme := createMeme(im, textTop, textBottom)
 
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, meme, nil); err != nil {
+		log.Print("Error encoding meme: ", err)
+		http.Error(w, "Failed to encode meme", http.StatusInternalServerError)
+		return
+	}
+
+	memeCache.Set(memeKey, buf.Bytes())
+
 	w.Header().Set("Content-Type", "image/jpeg")
-	jpeg.Encode(w, meme, nil)
+	w.Write(buf.Bytes())
 }
 
 func main() {
