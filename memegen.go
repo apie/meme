@@ -100,19 +100,17 @@ func createMeme(im image.Image, textTop string, textBottom string) image.Image {
 	positionBottomY := float64(5 * height / 6)
 
 	dc.SetRGB(0, 0, 0)
-	n := 6 // "stroke" size
-	for dy := -n; dy <= n; dy++ {
-		for dx := -n; dx <= n; dx++ {
-			if dx*dx+dy*dy >= n*n {
-				// give it rounded corners
-				continue
-			}
-			x := positionX + float64(dx)
-			ytop := positionTopY + float64(dy)
-			ybottom := positionBottomY + float64(dy)
-			dc.DrawStringAnchored(strings.ToUpper(textTop), x, ytop, 0.5, 0)
-			dc.DrawStringAnchored(strings.ToUpper(textBottom), x, ybottom, 0.5, 1)
-		}
+	const n = 6.0    // "stroke" size
+	const steps = 24 // points sampled around the stroke's circumference
+	for i := 0; i < steps; i++ {
+		angle := 2 * math.Pi * float64(i) / steps
+		dx := n * math.Cos(angle)
+		dy := n * math.Sin(angle)
+		x := positionX + dx
+		ytop := positionTopY + dy
+		ybottom := positionBottomY + dy
+		dc.DrawStringAnchored(strings.ToUpper(textTop), x, ytop, 0.5, 0)
+		dc.DrawStringAnchored(strings.ToUpper(textBottom), x, ybottom, 0.5, 1)
 	}
 
 	dc.SetRGB(1, 1, 1)
