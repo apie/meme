@@ -16,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/fogleman/gg"
+	"github.com/golang/freetype/truetype"
 )
 
 // lruCache is a simple thread-safe, bounded, in-memory LRU cache.
@@ -81,7 +82,20 @@ var (
 	// memeCache holds fully rendered JPEG output keyed by URL+top+bottom,
 	// so requesting the exact same meme again skips rendering entirely.
 	memeCache = newLRUCache(100)
+
+	// impactFont is the parsed Impact font, loaded once at startup so that
+	// each request only needs to build a sized face from it rather than
+	// re-reading and re-parsing the TTF file from disk every time.
+	impactFont *truetype.Font
 )
+
+func loadImpactFont() (*truetype.Font, error) {
+	fontBytes, err := os.ReadFile("/usr/share/fonts/truetype/msttcorefonts/impact.ttf")
+	if err != nil {
+		return nil, err
+	}
+	return truetype.Parse(fontBytes)
+}
 
 func createMeme(im image.Image, textTop string, textBottom string) image.Image {
 	bounds := im.Bounds()
@@ -90,10 +104,7 @@ func createMeme(im image.Image, textTop string, textBottom string) image.Image {
 	max := math.Round(float64(width) / 10)
 
 	dc := gg.NewContextForImage(im)
-
-	if err := dc.LoadFontFace("/usr/share/fonts/truetype/msttcorefonts/impact.ttf", max); err != nil {
-		panic(err)
-	}
+	dc.SetFontFace(truetype.NewFace(impactFont, &truetype.Options{Size: max}))
 
 	positionX := float64(width / 2)
 	positionTopY := float64(height / 6)
@@ -194,6 +205,12 @@ func handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	var err error
+	impactFont, err = loadImpactFont()
+	if err != nil {
+		log.Fatal("Failed to load font: ", err)
+	}
+
 	http.HandleFunc("/", handler)
 
 	port := os.Getenv("PORT")
