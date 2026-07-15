@@ -11,6 +11,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -87,7 +88,23 @@ var (
 	// each request only needs to build a sized face from it rather than
 	// re-reading and re-parsing the TTF file from disk every time.
 	impactFont *truetype.Font
+
+	// allowedImageDomains is the whitelist of hosts images may be fetched from,
+	// populated from the required ALLOWED_IMAGE_DOMAINS env var (comma-separated).
+	allowedImageDomains []string
 )
+
+// isAllowedImageDomain reports whether host is allowed to be fetched from,
+// matching either exactly or as a subdomain of an entry in allowedImageDomains.
+func isAllowedImageDomain(host string) bool {
+	host = strings.ToLower(host)
+	for _, domain := range allowedImageDomains {
+		if host == domain || strings.HasSuffix(host, "."+domain) {
+			return true
+		}
+	}
+	return false
+}
 
 func loadImpactFont() (*truetype.Font, error) {
 	fontBytes, err := os.ReadFile("/usr/share/fonts/truetype/msttcorefonts/impact.ttf")
@@ -145,6 +162,17 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "Generate meme by providing an image URL, top and bottom text using query parameters. See <a href=\"/?top=I'm in ur cloud&bottom=creating ur memes&image=https://upload.wikimedia.org/wikipedia/commons/f/ff/Cat_on_laptop_-_Just_Browsing.jpg\">example</a>")
 		return
 	}
+	parsedURL, err := url.Parse(imgURL)
+	if err != nil {
+		http.Error(w, "Invalid image URL", http.StatusBadRequest)
+		return
+	}
+	if !isAllowedImageDomain(parsedURL.Hostname()) {
+		log.Print("Rejected image from disallowed domain: ", imgURL)
+		http.Error(w, "Image domain not allowed", http.StatusForbidden)
+		return
+	}
+
 	memeKey := imgURL + "\x00" + textTop + "\x00" + textBottom
 	if cached, ok := memeCache.Get(memeKey); ok {
 		log.Print("Meme cache hit for ", imgURL)
@@ -210,6 +238,20 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to load font: ", err)
 	}
+
+	domains := os.Getenv("ALLOWED_IMAGE_DOMAINS")
+	if domains == "" {
+		log.Fatal("ALLOWED_IMAGE_DOMAINS must be set to a comma-separated whitelist of allowed image domains")
+	}
+	for _, domain := range strings.Split(domains, ",") {
+		if domain = strings.ToLower(strings.TrimSpace(domain)); domain != "" {
+			allowedImageDomains = append(allowedImageDomains, domain)
+		}
+	}
+	if len(allowedImageDomains) == 0 {
+		log.Fatal("ALLOWED_IMAGE_DOMAINS must contain at least one domain")
+	}
+	log.Print("Restricting image fetches to domains: ", allowedImageDomains)
 
 	http.HandleFunc("/", handler)
 
