@@ -114,7 +114,7 @@ func loadImpactFont() (*truetype.Font, error) {
 	return truetype.Parse(fontBytes)
 }
 
-func createMeme(im image.Image, textTop string, textBottom string) image.Image {
+func createMeme(im image.Image, textTop string, textMiddle string, textBottom string) image.Image {
 	bounds := im.Bounds()
 	width := bounds.Dx()
 	height := bounds.Dy()
@@ -125,6 +125,7 @@ func createMeme(im image.Image, textTop string, textBottom string) image.Image {
 
 	positionX := float64(width / 2)
 	positionTopY := float64(height / 6)
+	positionMiddleY := float64(height / 2)
 	positionBottomY := float64(5 * height / 6)
 
 	dc.SetRGB(0, 0, 0)
@@ -136,13 +137,16 @@ func createMeme(im image.Image, textTop string, textBottom string) image.Image {
 		dy := n * math.Sin(angle)
 		x := positionX + dx
 		ytop := positionTopY + dy
+		ymiddle := positionMiddleY + dy
 		ybottom := positionBottomY + dy
 		dc.DrawStringAnchored(strings.ToUpper(textTop), x, ytop, 0.5, 0)
+		dc.DrawStringAnchored(strings.ToUpper(textMiddle), x, ymiddle, 0.5, 0.5)
 		dc.DrawStringAnchored(strings.ToUpper(textBottom), x, ybottom, 0.5, 1)
 	}
 
 	dc.SetRGB(1, 1, 1)
 	dc.DrawStringAnchored(strings.ToUpper(textTop), positionX, positionTopY, 0.5, 0)
+	dc.DrawStringAnchored(strings.ToUpper(textMiddle), positionX, positionMiddleY, 0.5, 0.5)
 	dc.DrawStringAnchored(strings.ToUpper(textBottom), positionX, positionBottomY, 0.5, 1)
 
 	return dc.Image()
@@ -153,13 +157,14 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	log.Print("New meme ", q)
 
 	textTop := q.Get("top")
+	textMiddle := q.Get("middle")
 	textBottom := q.Get("bottom")
 
 	// Download image
 	imgURL := q.Get("image")
 	if imgURL == "" {
 		w.Header().Set("Content-Type", "text/html")
-		fmt.Fprintf(w, "Generate meme by providing an image URL, top and bottom text using query parameters. See <a href=\"/?top=I'm in ur cloud&bottom=creating ur memes&image=https://upload.wikimedia.org/wikipedia/commons/f/ff/Cat_on_laptop_-_Just_Browsing.jpg\">example</a>")
+		fmt.Fprintf(w, "Generate meme by providing an image URL, top, middle, and bottom text using query parameters. See <a href=\"/?top=I'm in ur cloud&bottom=creating ur memes&image=https://upload.wikimedia.org/wikipedia/commons/f/ff/Cat_on_laptop_-_Just_Browsing.jpg\">example</a>")
 		return
 	}
 	parsedURL, err := url.Parse(imgURL)
@@ -173,7 +178,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	memeKey := imgURL + "\x00" + textTop + "\x00" + textBottom
+	memeKey := imgURL + "\x00" + textTop + "\x00" + textMiddle + "\x00" + textBottom
 	if cached, ok := memeCache.Get(memeKey); ok {
 		log.Print("Meme cache hit for ", imgURL)
 		w.Header().Set("Content-Type", "image/jpeg")
@@ -217,7 +222,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		imageCache.Set(imgURL, im)
 	}
 
-	meme := createMeme(im, textTop, textBottom)
+	meme := createMeme(im, textTop, textMiddle, textBottom)
 
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, meme, nil); err != nil {
