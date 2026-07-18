@@ -92,6 +92,10 @@ var (
 	// allowedImageDomains is the whitelist of hosts images may be fetched from,
 	// populated from the required ALLOWED_IMAGE_DOMAINS env var (comma-separated).
 	allowedImageDomains []string
+
+	// defaultImageDomain is prefixed onto the image query parameter when it
+	// isn't already a URL, populated from the optional DEFAULT_IMAGE_DOMAIN env var.
+	defaultImageDomain string
 )
 
 // isAllowedImageDomain reports whether host is allowed to be fetched from,
@@ -166,6 +170,11 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		fmt.Fprintf(w, "Generate meme by providing an image URL, top, middle, and bottom text using query parameters. See <a href=\"/?top=I'm in ur cloud&bottom=creating ur memes&image=https://upload.wikimedia.org/wikipedia/commons/f/ff/Cat_on_laptop_-_Just_Browsing.jpg\">example</a>")
 		return
+	}
+	if defaultImageDomain != "" {
+		if u, err := url.Parse(imgURL); err != nil || u.Scheme == "" || u.Host == "" {
+			imgURL = "https://" + defaultImageDomain + "/" + strings.TrimPrefix(imgURL, "/")
+		}
 	}
 	parsedURL, err := url.Parse(imgURL)
 	if err != nil {
@@ -257,6 +266,11 @@ func main() {
 		log.Fatal("ALLOWED_IMAGE_DOMAINS must contain at least one domain")
 	}
 	log.Print("Restricting image fetches to domains: ", allowedImageDomains)
+
+	defaultImageDomain = strings.ToLower(strings.TrimSpace(os.Getenv("DEFAULT_IMAGE_DOMAIN")))
+	if defaultImageDomain != "" {
+		log.Print("Defaulting non-URL image values to domain: ", defaultImageDomain)
+	}
 
 	http.HandleFunc("/", handler)
 
